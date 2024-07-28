@@ -148,15 +148,15 @@ class PolicyGen:
 
 if __name__ == "__main__":
 
-    header = "                       _ \n"
-    header += "     PolicyGen %s  | |\n" % VERSION
-    header += "      _ __   __ _  ___| | _\n"
-    header += "     | '_ \ / _` |/ __| |/ /\n"
-    header += "     | |_) | (_| | (__|   < \n"
-    header += "     | .__/ \__,_|\___|_|\_\\\n"
-    header += "     | |                    \n"
-    header += "     |_| iphelix@thesprawl.org\n"
-    header += "\n"
+    header =   "                       _ \n"
+    header +=  "     PolicyGen %s  | |\n" % VERSION
+    header +=  "      _ __   __ _  ___| | _\n"
+    header += r"     | '_ \ / _` |/ __| |/ /{}".format("\n")
+    header +=  "     | |_) | (_| | (__|   < \n"
+    header += r"     | .__/ \__,_|\___|_|\_{}".format("\\\n")
+    header +=  "     | |                    \n"
+    header +=  "     |_| iphelix@thesprawl.org\n"
+    header +=  "\n"
 
     # parse command line arguments
     parser = OptionParser("%prog [options]\n\nType --help for more options", version="%prog " + VERSION)
