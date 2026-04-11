@@ -73,8 +73,8 @@ class RuleGen:
         # Preanalysis Password Patterns
         self.password_pattern = dict()
         self.password_pattern["insertion"] = re.compile('^[^a-z]*(?P<password>.+?)[^a-z]*$', re.IGNORECASE)
-        self.password_pattern["email"] = re.compile('^(?P<password>.+?)@[A-Z0-9.-]+\.[A-Z]{2,4}', re.IGNORECASE)
-        self.password_pattern["alldigits"] = re.compile('^(\d+)$', re.IGNORECASE)
+        self.password_pattern["email"] = re.compile(r'^(?P<password>.+?)@[A-Z0-9.-]+\.[A-Z]{2,4}', re.IGNORECASE)
+        self.password_pattern["alldigits"] = re.compile(r'^(\d+)$', re.IGNORECASE)
         self.password_pattern["allspecial"] = re.compile('^([^a-z0-9]+)$', re.IGNORECASE)
 
         ########################################################################
@@ -1006,9 +1006,11 @@ class RuleGen:
         words_queue = multiprocessing.Queue()
 
         # Start workers
+        pw_procs = []
         for i in range(self.threads):
-            multiprocessing.Process(target=self.password_worker,
-                                    args=(i, passwords_queue, rules_queue, words_queue)).start()
+            pw_procs.append(multiprocessing.Process(target=self.password_worker,
+                                    args=(i, passwords_queue, rules_queue, words_queue)))
+            pw_procs[i].start()
         multiprocessing.Process(target=self.rule_worker, args=(rules_queue, "%s.rule" % self.basename)).start()
         multiprocessing.Process(target=self.word_worker, args=(words_queue, "%s.word" % self.basename)).start()
 
@@ -1045,9 +1047,9 @@ class RuleGen:
             for i in range(self.threads):
                 passwords_queue.put(None)
 
-                # Wait for all of the queued passwords to finish.
-            while not passwords_queue.empty():
-                time.sleep(1)
+            # Wait for all of the queued passwords to finish.
+            for proc in pw_procs:
+                proc.join()
 
             # Signal writers to stop.
             rules_queue.put(None)
@@ -1129,15 +1131,15 @@ class RuleGen:
 
 if __name__ == "__main__":
 
-    header = "                       _ \n"
-    header += "     RuleGen %s    | |\n" % VERSION
-    header += "      _ __   __ _  ___| | _\n"
-    header += "     | '_ \ / _` |/ __| |/ /\n"
-    header += "     | |_) | (_| | (__|   < \n"
-    header += "     | .__/ \__,_|\___|_|\_\\\n"
-    header += "     | |                    \n"
-    header += "     |_| iphelix@thesprawl.org\n"
-    header += "\n"
+    header =   "                       _ \n"
+    header +=  "     RuleGen %s    | |\n" % VERSION
+    header +=  "      _ __   __ _  ___| | _\n"
+    header += r"     | '_ \ / _` |/ __| |/ /" + "\n"
+    header +=  "     | |_) | (_| | (__|   < \n"
+    header += r"     | .__/ \__,_|\___|_|\_\ " + "\n"
+    header +=  "     | |                    \n"
+    header +=  "     |_| iphelix@thesprawl.org\n"
+    header +=  "\n"
 
     parser = OptionParser("%prog [options] passwords.txt", version="%prog " + VERSION)
 
