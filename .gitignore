@@ -1,0 +1,27 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# PACK output files
+*.rule
+*.word
+*.masks
+*.hcmask
+
+# Editor / OS cruft
+.idea/
+.vscode/
+*.swp
+.DS_Store

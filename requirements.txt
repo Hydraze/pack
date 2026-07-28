@@ -1,0 +1,6 @@
+# Only rulegen.py requires a third-party package.
+# statsgen.py, maskgen.py and policygen.py use the standard library only.
+#
+# pyenchant also needs the system 'enchant' library and a dictionary, e.g. on
+# Debian/Ubuntu:  sudo apt install libenchant-2-2 aspell-en hunspell-en-us
+pyenchant>=3.2

@@ -3,18 +3,18 @@
 #
 # This tool is part of PACK (Password Analysis and Cracking Kit)
 #
-# VERSION 0.0.2
+# VERSION 0.0.3
 #
 # Copyright (C) 2013 Peter Kacherginsky
 # All rights reserved.
 #
 # Please see the attached LICENSE file for additional licensing information.
 
+import argparse
 import datetime
-from optparse import OptionParser, OptionGroup
 import itertools
 
-VERSION = "0.0.2"
+VERSION = "0.0.3"
 
 
 class PolicyGen:
@@ -146,51 +146,46 @@ class PolicyGen:
         print("[*] Policy Masks: %d Time: %s" % (sample_count, sample_time_human))
 
 
-if __name__ == "__main__":
+def main():
 
-    header = "                       _ \n"
-    header += "     PolicyGen %s  | |\n" % VERSION
-    header += "      _ __   __ _  ___| | _\n"
-    header += "     | '_ \ / _` |/ __| |/ /\n"
-    header += "     | |_) | (_| | (__|   < \n"
-    header += "     | .__/ \__,_|\___|_|\_\\\n"
-    header += "     | |                    \n"
-    header += "     |_| iphelix@thesprawl.org\n"
-    header += "\n"
+    header = r"""                       _
+     PolicyGen %s  | |
+      _ __   __ _  ___| | _
+     | '_ \ / _` |/ __| |/ /
+     | |_) | (_| | (__|   <
+     | .__/ \__,_|\___|_|\_\
+     | |
+     |_| iphelix@thesprawl.org
+""" % VERSION
 
     # parse command line arguments
-    parser = OptionParser("%prog [options]\n\nType --help for more options", version="%prog " + VERSION)
-    parser.add_option("-o", "--outputmasks", dest="output_masks", help="Save masks to a file", metavar="masks.hcmask")
-    parser.add_option("--pps", dest="pps", help="Passwords per Second", type="int", metavar="1000000000")
-    parser.add_option("--showmasks", dest="showmasks", help="Show matching masks", action="store_true", default=False)
-    parser.add_option("--noncompliant", dest="noncompliant", help="Generate masks for noncompliant passwords",
-                      action="store_true", default=False)
+    parser = argparse.ArgumentParser(
+        description="Generate password masks matching (or violating) a password policy.")
+    parser.add_argument("--version", action="version", version="%(prog)s " + VERSION)
+    parser.add_argument("-o", "--outputmasks", dest="output_masks", metavar="masks.hcmask",
+                        help="Save masks to a file")
+    parser.add_argument("--pps", type=int, metavar="1000000000", help="Passwords per Second")
+    parser.add_argument("--showmasks", action="store_true", help="Show matching masks")
+    parser.add_argument("--noncompliant", action="store_true",
+                        help="Generate masks for noncompliant passwords")
 
-    group = OptionGroup(parser, "Password Policy",
-                        "Define the minimum (or maximum) password strength policy that you would like to test")
-    group.add_option("--minlength", dest="minlength", type="int", metavar="8", default=8,
-                     help="Minimum password length")
-    group.add_option("--maxlength", dest="maxlength", type="int", metavar="8", default=8,
-                     help="Maximum password length")
-    group.add_option("--mindigit", dest="mindigit", type="int", metavar="1", help="Minimum number of digits")
-    group.add_option("--minlower", dest="minlower", type="int", metavar="1",
-                     help="Minimum number of lower-case characters")
-    group.add_option("--minupper", dest="minupper", type="int", metavar="1",
-                     help="Minimum number of upper-case characters")
-    group.add_option("--minspecial", dest="minspecial", type="int", metavar="1",
-                     help="Minimum number of special characters")
-    group.add_option("--maxdigit", dest="maxdigit", type="int", metavar="3", help="Maximum number of digits")
-    group.add_option("--maxlower", dest="maxlower", type="int", metavar="3",
-                     help="Maximum number of lower-case characters")
-    group.add_option("--maxupper", dest="maxupper", type="int", metavar="3",
-                     help="Maximum number of upper-case characters")
-    group.add_option("--maxspecial", dest="maxspecial", type="int", metavar="3",
-                     help="Maximum number of special characters")
-    parser.add_option_group(group)
+    group = parser.add_argument_group(
+        "Password Policy",
+        "Define the minimum (or maximum) password strength policy that you would like to test")
+    group.add_argument("--minlength", type=int, metavar="8", default=8, help="Minimum password length")
+    group.add_argument("--maxlength", type=int, metavar="8", default=8, help="Maximum password length")
+    group.add_argument("--mindigit", type=int, metavar="1", help="Minimum number of digits")
+    group.add_argument("--minlower", type=int, metavar="1", help="Minimum number of lower-case characters")
+    group.add_argument("--minupper", type=int, metavar="1", help="Minimum number of upper-case characters")
+    group.add_argument("--minspecial", type=int, metavar="1", help="Minimum number of special characters")
+    group.add_argument("--maxdigit", type=int, metavar="3", help="Maximum number of digits")
+    group.add_argument("--maxlower", type=int, metavar="3", help="Maximum number of lower-case characters")
+    group.add_argument("--maxupper", type=int, metavar="3", help="Maximum number of upper-case characters")
+    group.add_argument("--maxspecial", type=int, metavar="3", help="Maximum number of special characters")
 
-    parser.add_option("-q", "--quiet", action="store_true", dest="quiet", default=False, help="Don't show headers.")
+    parser.add_argument("-q", "--quiet", action="store_true", help="Don't show headers.")
 
-    (options, args) = parser.parse_args()
+    options = parser.parse_args()
 
     # Print program header
     if not options.quiet:
@@ -242,4 +237,12 @@ if __name__ == "__main__":
         policygen.maxlower, policygen.maxupper, policygen.maxdigit, policygen.maxspecial))
 
     print("[*] Generating [%s] masks." % ("compliant" if not options.noncompliant else "non-compliant"))
-    policygen.generate_masks(options.noncompliant)
+    try:
+        policygen.generate_masks(options.noncompliant)
+    finally:
+        if policygen.output_file:
+            policygen.output_file.close()
+
+
+if __name__ == "__main__":
+    main()
