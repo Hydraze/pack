@@ -257,7 +257,7 @@ def main():
     parser.add_argument("-o", "--output", dest="output_file", metavar="password.masks",
                         help="Save masks and stats to a file")
     parser.add_argument("--hiderare", action="store_true",
-                        help="Hide statistics covering less than 1% of the sample")
+                        help="Hide statistics covering less than 1%% of the sample")
     parser.add_argument("-q", "--quiet", action="store_true", help="Don't show headers.")
 
     options = parser.parse_args()
