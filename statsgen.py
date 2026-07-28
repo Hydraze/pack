@@ -3,18 +3,19 @@
 #
 # This tool is part of PACK (Password Analysis and Cracking Kit)
 #
-# VERSION 0.0.3
+# VERSION 0.0.4
 #
 # Copyright (C) 2013 Peter Kacherginsky
 # All rights reserved.
 #
 # Please see the attached LICENSE file for additional licensing information.
 
+import argparse
 import operator
 import string
-from optparse import OptionParser, OptionGroup
+from collections import Counter
 
-VERSION = "0.0.3"
+VERSION = "0.0.4"
 
 
 class StatsGen:
@@ -30,10 +31,10 @@ class StatsGen:
         self.debug = True
 
         # Stats dictionaries
-        self.stats_length = dict()
-        self.stats_simplemasks = dict()
-        self.stats_advancedmasks = dict()
-        self.stats_charactersets = dict()
+        self.stats_length = Counter()
+        self.stats_simplemasks = Counter()
+        self.stats_advancedmasks = Counter()
+        self.stats_charactersets = Counter()
 
         # Ignore stats with less than 1% coverage
         self.hiderare = False
@@ -137,70 +138,60 @@ class StatsGen:
     def generate_stats(self, filename):
         """ Generate password statistics. """
 
-        f = open(filename, 'r', encoding="latin-1", errors='ignore')
-        for password in f:
-            password = password.rstrip('\r\n')
+        with open(filename, 'r', encoding="latin-1", errors='ignore') as f:
+            for password in f:
+                password = password.rstrip('\r\n')
 
-            # if the password is empty, continue
-            if not password:
-                continue
+                # if the password is empty, continue
+                if not password:
+                    continue
 
-            self.total_counter += 1
+                self.total_counter += 1
 
-            (pass_length, characterset, simplemask, advancedmask, policy) = self.analyze_password(password)
-            (digit, lower, upper, special) = policy
+                (pass_length, characterset, simplemask, advancedmask, policy) = self.analyze_password(password)
+                (digit, lower, upper, special) = policy
 
-            if (self.charsets is None or characterset in self.charsets) and \
-               (self.simplemasks is None or simplemask in self.simplemasks) and \
-               (self.maxlength is None or pass_length <= self.maxlength) and \
-               (self.minlength is None or pass_length >= self.minlength):
+                if (self.charsets is None or characterset in self.charsets) and \
+                   (self.simplemasks is None or simplemask in self.simplemasks) and \
+                   (self.maxlength is None or pass_length <= self.maxlength) and \
+                   (self.minlength is None or pass_length >= self.minlength):
 
-                self.filter_counter += 1
+                    self.filter_counter += 1
 
-                if self.mindigit is None or digit < self.mindigit:
-                    self.mindigit = digit
-                if self.maxdigit is None or digit > self.maxdigit:
-                    self.maxdigit = digit
+                    if self.mindigit is None or digit < self.mindigit:
+                        self.mindigit = digit
+                    if self.maxdigit is None or digit > self.maxdigit:
+                        self.maxdigit = digit
 
-                if self.minupper is None or upper < self.minupper:
-                    self.minupper = upper
-                if self.maxupper is None or upper > self.maxupper:
-                    self.maxupper = upper
+                    if self.minupper is None or upper < self.minupper:
+                        self.minupper = upper
+                    if self.maxupper is None or upper > self.maxupper:
+                        self.maxupper = upper
 
-                if self.minlower is None or lower < self.minlower:
-                    self.minlower = lower
-                if self.maxlower is None or lower > self.maxlower:
-                    self.maxlower = lower
+                    if self.minlower is None or lower < self.minlower:
+                        self.minlower = lower
+                    if self.maxlower is None or lower > self.maxlower:
+                        self.maxlower = lower
 
-                if self.minspecial is None or special < self.minspecial:
-                    self.minspecial = special
-                if self.maxspecial is None or special > self.maxspecial:
-                    self.maxspecial = special
+                    if self.minspecial is None or special < self.minspecial:
+                        self.minspecial = special
+                    if self.maxspecial is None or special > self.maxspecial:
+                        self.maxspecial = special
 
-                if pass_length in self.stats_length:
                     self.stats_length[pass_length] += 1
-                else:
-                    self.stats_length[pass_length] = 1
-
-                if characterset in self.stats_charactersets:
                     self.stats_charactersets[characterset] += 1
-                else:
-                    self.stats_charactersets[characterset] = 1
-
-                if simplemask in self.stats_simplemasks:
                     self.stats_simplemasks[simplemask] += 1
-                else:
-                    self.stats_simplemasks[simplemask] = 1
-
-                if advancedmask in self.stats_advancedmasks:
                     self.stats_advancedmasks[advancedmask] += 1
-                else:
-                    self.stats_advancedmasks[advancedmask] = 1
-
-        f.close()
 
     def print_stats(self):
         """ Print password statistics. """
+
+        if self.total_counter == 0:
+            print("[!] No passwords were found to analyze.")
+            return
+        if self.filter_counter == 0:
+            print("[!] No passwords matched the specified filters (0/%d)." % self.total_counter)
+            return
 
         print("[+] Analyzing %d%% (%d/%d) of passwords" % (self.filter_counter*100//self.total_counter,
                                                            self.filter_counter, self.total_counter))
@@ -239,46 +230,43 @@ class StatsGen:
             if self.output_file:
                 self.output_file.write("%s,%d\n" % (advancedmask, count))
 
-if __name__ == "__main__":
+def main():
 
-    header = "                       _ \n"
-    header += "     StatsGen %s   | |\n" % VERSION
-    header += "      _ __   __ _  ___| | _\n"
-    header += "     | '_ \ / _` |/ __| |/ /\n"
-    header += "     | |_) | (_| | (__|   < \n"
-    header += "     | .__/ \__,_|\___|_|\_\\\n"
-    header += "     | |                    \n"
-    header += "     |_| iphelix@thesprawl.org\n"
-    header += "\n"
+    header = r"""                       _
+     StatsGen %s   | |
+      _ __   __ _  ___| | _
+     | '_ \ / _` |/ __| |/ /
+     | |_) | (_| | (__|   <
+     | .__/ \__,_|\___|_|\_\
+     | |
+     |_| iphelix@thesprawl.org
+""" % VERSION
 
-    parser = OptionParser("%prog [options] passwords.txt\n\nType --help for more options", version="%prog "+VERSION)
+    parser = argparse.ArgumentParser(description="Password statistical analysis tool.")
+    parser.add_argument("--version", action="version", version="%(prog)s " + VERSION)
+    parser.add_argument("passwords", metavar="passwords.txt", help="Password file to analyze.")
 
-    filters = OptionGroup(parser, "Password Filters")
-    filters.add_option("--minlength", dest="minlength", type="int", metavar="8", help="Minimum password length")
-    filters.add_option("--maxlength", dest="maxlength", type="int", metavar="8", help="Maximum password length")
-    filters.add_option("--charset", dest="charsets", help="Password charset filter (comma separated)",
-                       metavar="loweralpha,numeric")
-    filters.add_option("--simplemask", dest="simplemasks", help="Password mask filter (comma separated)",
-                       metavar="stringdigit,allspecial")
-    parser.add_option_group(filters)
+    filters = parser.add_argument_group("Password Filters")
+    filters.add_argument("--minlength", type=int, metavar="8", help="Minimum password length")
+    filters.add_argument("--maxlength", type=int, metavar="8", help="Maximum password length")
+    filters.add_argument("--charset", dest="charsets", metavar="loweralpha,numeric",
+                         help="Password charset filter (comma separated)")
+    filters.add_argument("--simplemask", dest="simplemasks", metavar="stringdigit,allspecial",
+                         help="Password mask filter (comma separated)")
 
-    parser.add_option("-o", "--output", dest="output_file", help="Save masks and stats to a file",
-                      metavar="password.masks")
-    parser.add_option("--hiderare", action="store_true", dest="hiderare", default=False,
-                      help="Hide statistics covering less than 1% of the sample")
+    parser.add_argument("-o", "--output", dest="output_file", metavar="password.masks",
+                        help="Save masks and stats to a file")
+    parser.add_argument("--hiderare", action="store_true",
+                        help="Hide statistics covering less than 1% of the sample")
+    parser.add_argument("-q", "--quiet", action="store_true", help="Don't show headers.")
 
-    parser.add_option("-q", "--quiet", action="store_true", dest="quiet", default=False, help="Don't show headers.")
-    (options, args) = parser.parse_args()
+    options = parser.parse_args()
 
     # Print program header
     if not options.quiet:
         print(header)
 
-    if len(args) != 1:
-        parser.error("no passwords file specified")
-        exit(1)
-
-    print("[*] Analyzing passwords in [%s]" % args[0])
+    print("[*] Analyzing passwords in [%s]" % options.passwords)
 
     statsgen = StatsGen()
 
@@ -298,5 +286,13 @@ if __name__ == "__main__":
         print("[*] Saving advanced masks and occurrences to [%s]" % options.output_file)
         statsgen.output_file = open(options.output_file, 'w')
 
-    statsgen.generate_stats(args[0])
-    statsgen.print_stats()
+    try:
+        statsgen.generate_stats(options.passwords)
+        statsgen.print_stats()
+    finally:
+        if statsgen.output_file:
+            statsgen.output_file.close()
+
+
+if __name__ == "__main__":
+    main()

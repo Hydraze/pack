@@ -5,27 +5,40 @@
 #
 # This tool is part of PACK (Password Analysis and Cracking Kit)
 #
-# VERSION 0.0.3
+# VERSION 0.0.5
 #
 # Copyright (C) 2013 Peter Kacherginsky
 # All rights reserved.
 #
 # Please see the attached LICENSE file for additional licensing information.
 
-import sys
-import re
-import time
-
+import argparse
 import multiprocessing
+import re
 import subprocess
-import enchant
-from optparse import OptionParser, OptionGroup
+import sys
+import time
 from collections import Counter
 
-VERSION = "0.0.4"
+try:
+    import enchant
+except ImportError:
+    enchant = None
+
+VERSION = "0.0.5"
 
 # Testing rules with hashcat --stdout
 HASHCAT_PATH = "hashcat/"
+
+
+# Minimal queue-like sink that prints items instead of enqueueing them. Used by
+# the single-password debugging mode so results are visible on stdout.
+class _PrintCollector:
+    def __init__(self, prefix):
+        self.prefix = prefix
+
+    def put(self, item):
+        print("%s %s" % (self.prefix, item))
 
 
 # Rule Generator class responsible for the complete cycle of rule generation
@@ -33,6 +46,13 @@ class RuleGen:
     # Initialize Rule Generator class
     def __init__(self, language="en", providers="aspell,myspell", basename='analysis',
                  threads=multiprocessing.cpu_count()):
+
+        if enchant is None:
+            raise ImportError(
+                "The 'pyenchant' package is required by rulegen. Install it with "
+                "'pip install pyenchant' (it also needs the system 'enchant' library "
+                "and a dictionary such as aspell-en or hunspell-en-us)."
+            )
 
         self.threads = threads
 
@@ -72,10 +92,10 @@ class RuleGen:
         ########################################################################
         # Preanalysis Password Patterns
         self.password_pattern = dict()
-        self.password_pattern["insertion"] = re.compile('^[^a-z]*(?P<password>.+?)[^a-z]*$', re.IGNORECASE)
-        self.password_pattern["email"] = re.compile('^(?P<password>.+?)@[A-Z0-9.-]+\.[A-Z]{2,4}', re.IGNORECASE)
-        self.password_pattern["alldigits"] = re.compile('^(\d+)$', re.IGNORECASE)
-        self.password_pattern["allspecial"] = re.compile('^([^a-z0-9]+)$', re.IGNORECASE)
+        self.password_pattern["insertion"] = re.compile(r'^[^a-z]*(?P<password>.+?)[^a-z]*$', re.IGNORECASE)
+        self.password_pattern["email"] = re.compile(r'^(?P<password>.+?)@[A-Z0-9.-]+\.[A-Z]{2,4}', re.IGNORECASE)
+        self.password_pattern["alldigits"] = re.compile(r'^(\d+)$', re.IGNORECASE)
+        self.password_pattern["allspecial"] = re.compile(r'^([^a-z0-9]+)$', re.IGNORECASE)
 
         ########################################################################
         # Hashcat Rules Engine
@@ -154,7 +174,7 @@ class RuleGen:
         # Delete M characters, starting at position N
         self.hashcat_rule["O"] = lambda x, y, z: x[:y] + x[y + z:]
         # Extracts M characters, starting at position N
-        self.hashcat_rule["'"] = lambda x, y, z: x[y:y+z]
+        self.hashcat_rule["x"] = lambda x, y, z: x[y:y + z]
         # Purge all instances of X
         self.hashcat_rule["@"] = lambda x, y: x.replace(y, '')
 
@@ -478,7 +498,7 @@ class RuleGen:
         password = preanalysis_password
 
         if self.debug:
-            "[*] Preanalysis Password: %s" % password
+            print("[*] Preanalysis Password: %s" % password)
 
         return self.enchant.suggest(password)
 
@@ -859,8 +879,17 @@ class RuleGen:
         else:
             return True
 
-    def analyze_password(self, password, rules_queue=multiprocessing.Queue(), words_queue=multiprocessing.Queue()):
-        """ Analyze a single password. """
+    def analyze_password(self, password, rules_queue=None, words_queue=None):
+        """ Analyze a single password.
+
+        When no queues are supplied (e.g. the ``--password`` debugging mode) the
+        generated rules and words are printed to stdout instead.
+        """
+
+        if rules_queue is None:
+            rules_queue = _PrintCollector("[rule]")
+        if words_queue is None:
+            words_queue = _PrintCollector("[word]")
 
         if self.verbose:
             print("[*] Analyzing password: %s" % password)
@@ -1069,37 +1098,27 @@ class RuleGen:
 
         # TODO: Counter breaks on large files. uniq -c | sort -rn is still the most 
         #       optimal way.
-        rules_file = open("%s.rule" % self.basename, 'r')
-        rules_sorted_file = open("%s-sorted.rule" % self.basename, 'w')
-        rules_counter = Counter(rules_file)
+        with open("%s.rule" % self.basename, 'r') as rules_file:
+            rules_counter = Counter(rules_file)
         rule_counter_total = sum(rules_counter.values())
 
         print("\n[*] Top 10 rules")
-        rules_i = 0
-        for (rule, count) in rules_counter.most_common():
-            rules_sorted_file.write(rule)
-            if rules_i < 10:
-                print("[+] %s - %d (%0.2f%%)" % (rule.rstrip('\r\n'), count, count * 100 / rule_counter_total))
-            rules_i += 1
+        with open("%s-sorted.rule" % self.basename, 'w') as rules_sorted_file:
+            for rules_i, (rule, count) in enumerate(rules_counter.most_common()):
+                rules_sorted_file.write(rule)
+                if rules_i < 10:
+                    print("[+] %s - %d (%0.2f%%)" % (rule.rstrip('\r\n'), count, count * 100 / rule_counter_total))
 
-        rules_file.close()
-        rules_sorted_file.close()
-
-        words_file = open("%s.word" % self.basename, 'r')
-        words_sorted_file = open("%s-sorted.word" % self.basename, 'w')
-        words_counter = Counter(words_file)
-        word_counter_total = sum(rules_counter.values())
+        with open("%s.word" % self.basename, 'r') as words_file:
+            words_counter = Counter(words_file)
+        word_counter_total = sum(words_counter.values())
 
         print("\n[*] Top 10 words")
-        words_i = 0
-        for (word, count) in words_counter.most_common():
-            words_sorted_file.write(word)
-            if words_i < 10:
-                print("[+] %s - %d (%0.2f%%)" % (word.rstrip('\r\n'), count, count * 100 / word_counter_total))
-            words_i += 1
-
-        words_file.close()
-        words_sorted_file.close()
+        with open("%s-sorted.word" % self.basename, 'w') as words_sorted_file:
+            for words_i, (word, count) in enumerate(words_counter.most_common()):
+                words_sorted_file.write(word)
+                if words_i < 10:
+                    print("[+] %s - %d (%0.2f%%)" % (word.rstrip('\r\n'), count, count * 100 / word_counter_total))
 
     ############################################################################
     def verify_hashcat_rules(self, word, rules, password):
@@ -1127,82 +1146,79 @@ class RuleGen:
                   (word, " ".join(rules or [':']), password, out))
 
 
-if __name__ == "__main__":
+def main():
 
-    header = "                       _ \n"
-    header += "     RuleGen %s    | |\n" % VERSION
-    header += "      _ __   __ _  ___| | _\n"
-    header += "     | '_ \ / _` |/ __| |/ /\n"
-    header += "     | |_) | (_| | (__|   < \n"
-    header += "     | .__/ \__,_|\___|_|\_\\\n"
-    header += "     | |                    \n"
-    header += "     |_| iphelix@thesprawl.org\n"
-    header += "\n"
+    header = r"""                       _
+     RuleGen %s    | |
+      _ __   __ _  ___| | _
+     | '_ \ / _` |/ __| |/ /
+     | |_) | (_| | (__|   <
+     | .__/ \__,_|\___|_|\_\
+     | |
+     |_| iphelix@thesprawl.org
+""" % VERSION
 
-    parser = OptionParser("%prog [options] passwords.txt", version="%prog " + VERSION)
+    parser = argparse.ArgumentParser(
+        description="Advanced automated password rule and wordlist generator for hashcat.")
+    parser.add_argument("--version", action="version", version="%(prog)s " + VERSION)
+    parser.add_argument("passwords", metavar="passwords.txt",
+                        help="Password file to analyze (or a single password with --password).")
 
-    parser.add_option("-b", "--basename",
-                      help="Output base name. The following files will be generated: " +
-                           "basename.words, basename.rules and basename.stats",
-                      default="analysis", metavar="rockyou")
-    parser.add_option("-w", "--wordlist", help="Use a custom wordlist for rule analysis.", metavar="wiki.dict")
-    parser.add_option("-q", "--quiet", action="store_true", dest="quiet", default=False, help="Don't show headers.")
-    parser.add_option("--threads", type="int", default=multiprocessing.cpu_count(),
-                      help="Parallel threads to use for processing.")
+    parser.add_argument("-b", "--basename", default="analysis", metavar="rockyou",
+                        help="Output base name. The files basename.rule and basename.word "
+                             "(plus their -sorted variants) are generated.")
+    parser.add_argument("-w", "--wordlist", metavar="wiki.dict",
+                        help="Use a custom wordlist for rule analysis.")
+    parser.add_argument("-q", "--quiet", action="store_true", help="Don't show headers.")
+    parser.add_argument("--threads", type=int, default=multiprocessing.cpu_count(),
+                        help="Parallel worker processes to use for processing.")
 
-    wordtune = OptionGroup(parser, "Fine tune source word generation:")
-    wordtune.add_option("--maxworddist", help="Maximum word edit distance (Levenshtein)", type="int", default=10,
-                        metavar="10")
-    wordtune.add_option("--maxwords", help="Maximum number of source word candidates to consider", type="int",
-                        default=5, metavar="5")
-    wordtune.add_option("--morewords", help="Consider suboptimal source word candidates", action="store_true",
-                        default=False)
-    wordtune.add_option("--simplewords", help="Generate simple source words for given passwords", action="store_true",
-                        default=False)
-    parser.add_option_group(wordtune)
+    wordtune = parser.add_argument_group("Fine tune source word generation")
+    wordtune.add_argument("--maxworddist", type=int, default=10, metavar="10",
+                          help="Maximum word edit distance (Levenshtein)")
+    wordtune.add_argument("--maxwords", type=int, default=5, metavar="5",
+                          help="Maximum number of source word candidates to consider")
+    wordtune.add_argument("--morewords", action="store_true", help="Consider suboptimal source word candidates")
+    wordtune.add_argument("--simplewords", action="store_true", help="Generate simple source words for given passwords")
 
-    ruletune = OptionGroup(parser, "Fine tune rule generation:")
-    ruletune.add_option("--maxrulelen", help="Maximum number of operations in a single rule", type="int", default=10,
-                        metavar="10")
-    ruletune.add_option("--maxrules", help="Maximum number of rules to consider", type="int", default=5, metavar="5")
-    ruletune.add_option("--morerules", help="Generate suboptimal rules", action="store_true", default=False)
-    ruletune.add_option("--simplerules", help="Generate simple rules insert,delete,replace", action="store_true",
-                        default=False)
-    ruletune.add_option("--bruterules", help="Bruteforce reversal and rotation rules (slow)", action="store_true",
-                        default=False)
-    parser.add_option_group(ruletune)
+    ruletune = parser.add_argument_group("Fine tune rule generation")
+    ruletune.add_argument("--maxrulelen", type=int, default=10, metavar="10",
+                          help="Maximum number of operations in a single rule")
+    ruletune.add_argument("--maxrules", type=int, default=5, metavar="5",
+                          help="Maximum number of rules to consider")
+    ruletune.add_argument("--morerules", action="store_true", help="Generate suboptimal rules")
+    ruletune.add_argument("--simplerules", action="store_true", help="Generate simple rules insert,delete,replace")
+    ruletune.add_argument("--bruterules", action="store_true",
+                          help="Bruteforce reversal and rotation rules (slow)")
 
-    spelltune = OptionGroup(parser, "Fine tune spell checker engine:")
-    spelltune.add_option("--providers", help="Comma-separated list of provider engines", default="aspell,myspell",
-                         metavar="aspell,myspell")
-    parser.add_option_group(spelltune)
+    spelltune = parser.add_argument_group("Fine tune spell checker engine")
+    spelltune.add_argument("--providers", default="aspell,hunspell", metavar="aspell,hunspell",
+                           help="Comma-separated list of enchant provider engines")
 
-    debug = OptionGroup(parser, "Debuggin options:")
-    debug.add_option("-v", "--verbose", help="Show verbose information.", action="store_true", default=False)
-    debug.add_option("-d", "--debug", help="Debug rules.", action="store_true", default=False)
-    debug.add_option("--password", help="Process the last argument as a password not a file.", action="store_true",
-                     default=False)
-    debug.add_option("--word", help="Use a custom word for rule analysis", metavar="Password")
-    debug.add_option("--hashcat", help="Test generated rules with hashcat-cli", action="store_true", default=False)
-    parser.add_option_group(debug)
+    debug = parser.add_argument_group("Debugging options")
+    debug.add_argument("-v", "--verbose", action="store_true", help="Show verbose information.")
+    debug.add_argument("-d", "--debug", action="store_true", help="Debug rules.")
+    debug.add_argument("--password", action="store_true",
+                       help="Process the argument as a single password rather than a file.")
+    debug.add_argument("--word", metavar="Password", help="Use a custom word for rule analysis")
+    debug.add_argument("--hashcat", action="store_true", help="Test generated rules with hashcat-cli")
 
-    (options, args) = parser.parse_args()
+    options = parser.parse_args()
 
     # Print program header
     if not options.quiet:
         print(header)
 
-    if len(args) < 1:
-        parser.error("no passwords file specified")
-        exit(1)
-
     try:
         rulegen = RuleGen(language="en", providers=options.providers, basename=options.basename,
                           threads=options.threads)
+    except ImportError as error:
+        print("[-] %s" % error)
+        sys.exit(1)
     except enchant.errors.DictNotFoundError:
         print("[-] Cannot find a dictionary for specified language. Please install it and try again.")
-        print("[*] Hint: Usually this dictionary resides within an aspell / myspell package.")
-        exit(-1)
+        print("[*] Hint: Usually this dictionary resides within an aspell / hunspell package.")
+        sys.exit(1)
 
     # Finetuning word generation
     rulegen.max_word_dist = options.maxworddist
@@ -1235,6 +1251,10 @@ if __name__ == "__main__":
 
     # Analyze a single password or several passwords in a file
     if options.password:
-        rulegen.analyze_password(args[0])
+        rulegen.analyze_password(options.passwords)
     else:
-        rulegen.analyze_passwords_file(args[0])
+        rulegen.analyze_passwords_file(options.passwords)
+
+
+if __name__ == "__main__":
+    main()

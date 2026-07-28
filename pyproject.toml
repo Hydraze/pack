@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pack-toolkit"
+version = "0.0.5"
+description = "PACK (Password Analysis and Cracking Kit) - analyze password lists and generate masks, rules and policies for hashcat."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [{ name = "Peter Kacherginsky (iphelix)" }]
+keywords = ["password", "hashcat", "masks", "rules", "security", "cracking"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Environment :: Console",
+]
+
+# statsgen, maskgen and policygen have no third-party dependencies.
+# rulegen additionally needs pyenchant (see the [project.optional-dependencies]
+# 'rulegen' extra) plus the system enchant library and a dictionary.
+dependencies = []
+
+[project.optional-dependencies]
+rulegen = ["pyenchant>=3.2"]
+
+[project.urls]
+Homepage = "https://github.com/iphelix/pack"
+
+[project.scripts]
+statsgen = "statsgen:main"
+maskgen = "maskgen:main"
+policygen = "policygen:main"
+rulegen = "rulegen:main"
+
+[tool.setuptools]
+py-modules = ["statsgen", "maskgen", "policygen", "rulegen"]
