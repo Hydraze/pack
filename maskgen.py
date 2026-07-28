@@ -34,6 +34,12 @@ class MaskGen:
         self.minoccurrence = None
         self.maxoccurrence = None
 
+        # Lengths for hashcat custom character sets (?1 through ?4).
+        self.customcharset1len = None
+        self.customcharset2len = None
+        self.customcharset3len = None
+        self.customcharset4len = None
+
         # PPS (Passwords per Second) Cracking Speed
         self.pps = 1000000000
         self.showmasks = False
@@ -41,8 +47,7 @@ class MaskGen:
         # Counter for total masks coverage
         self.total_occurrence = 0
 
-    @staticmethod
-    def getcomplexity(mask):
+    def getcomplexity(self, mask):
         """ Return mask complexity. """
         count = 1
         for char in mask[1:].split("?"):
@@ -56,6 +61,18 @@ class MaskGen:
                 count *= 33
             elif char == "a":
                 count *= 95
+            elif char == "b":
+                count *= 256
+            elif char in ("h", "H"):
+                count *= 16
+            elif char == "1" and self.customcharset1len is not None:
+                count *= self.customcharset1len
+            elif char == "2" and self.customcharset2len is not None:
+                count *= self.customcharset2len
+            elif char == "3" and self.customcharset3len is not None:
+                count *= self.customcharset3len
+            elif char == "4" and self.customcharset4len is not None:
+                count *= self.customcharset4len
             else:
                 print("[!] Error, unknown mask ?%s in a mask %s" % (char, mask))
 
@@ -81,9 +98,9 @@ class MaskGen:
                 # Apply filters based on occurrence, length, complexity and time
                 if (self.minoccurrence is None or mask_occurrence >= self.minoccurrence) and \
                    (self.maxoccurrence is None or mask_occurrence <= self.maxoccurrence) and \
-                   (self.mincomplexity is None or mask_complexity <= self.mincomplexity) and \
+                   (self.mincomplexity is None or mask_complexity >= self.mincomplexity) and \
                    (self.maxcomplexity is None or mask_complexity <= self.maxcomplexity) and \
-                   (self.mintime is None or mask_time <= self.mintime) and \
+                   (self.mintime is None or mask_time >= self.mintime) and \
                    (self.maxtime is None or mask_time <= self.maxtime) and \
                    (self.maxlength is None or mask_length <= self.maxlength) and \
                    (self.minlength is None or mask_length >= self.minlength):
@@ -224,6 +241,16 @@ def main():
 
     parser.add_argument("--showmasks", action="store_true", help="Show matching masks")
 
+    custom = parser.add_argument_group("Custom character set options")
+    custom.add_argument("--custom-charset1-len", type=int, metavar="26",
+                        help="Length of hashcat custom character set ?1")
+    custom.add_argument("--custom-charset2-len", type=int, metavar="26",
+                        help="Length of hashcat custom character set ?2")
+    custom.add_argument("--custom-charset3-len", type=int, metavar="26",
+                        help="Length of hashcat custom character set ?3")
+    custom.add_argument("--custom-charset4-len", type=int, metavar="26",
+                        help="Length of hashcat custom character set ?4")
+
     misc = parser.add_argument_group("Miscellaneous options")
     misc.add_argument("--pps", type=int, metavar="1000000000", help="Passwords per Second")
     misc.add_argument("-q", "--quiet", action="store_true", help="Don't show headers.")
@@ -263,6 +290,12 @@ def main():
         maskgen.minoccurrence = options.minoccurrence
     if options.maxoccurrence:
         maskgen.maxoccurrence = options.maxoccurrence
+
+    # Custom character set lengths
+    for number in range(1, 5):
+        length = getattr(options, "custom_charset%d_len" % number)
+        if length is not None:
+            setattr(maskgen, "customcharset%dlen" % number, length)
 
     # Misc
     if options.pps:
