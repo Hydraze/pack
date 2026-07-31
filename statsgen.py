@@ -199,23 +199,37 @@ class StatsGen:
 
         f.close()
 
+    def percent(self, count):
+        """ Share of the analyzed sample, as a truncated whole percent. """
+        if not self.filter_counter:
+            return 0
+        return count * 100 // self.filter_counter
+
+    def israre(self, count):
+        """ True when an entry covers less than 1% of the analyzed sample. """
+        return self.percent(count) == 0
+
     def print_stats(self):
         """ Print password statistics. """
+
+        if not self.total_counter:
+            print("[!] No statistics to report: the input contained 0 passwords.")
+            return
 
         print("[+] Analyzing %d%% (%d/%d) of passwords" % (self.filter_counter*100//self.total_counter,
                                                            self.filter_counter, self.total_counter))
         print("[*] Statistics below is relative to the number of analyzed passwords, not total number of passwords")
         print("\n[*] Length:")
         for (length, count) in sorted(iter(self.stats_length.items()), key=operator.itemgetter(1), reverse=True):
-            if self.hiderare and not count*100//self.filter_counter > 0:
+            if self.hiderare and self.israre(count):
                 continue
-            print("[+] %25d: %02d%% (%d)" % (length, count*100/self.filter_counter, count))
+            print("[+] %25d: %02d%% (%d)" % (length, self.percent(count), count))
 
         print("\n[*] Character-set:")
         for (char, count) in sorted(iter(self.stats_charactersets.items()), key=operator.itemgetter(1), reverse=True):
-            if self.hiderare and not count*100//self.filter_counter > 0:
+            if self.hiderare and self.israre(count):
                 continue
-            print("[+] %25s: %02d%% (%d)" % (char, count*100/self.filter_counter, count))
+            print("[+] %25s: %02d%% (%d)" % (char, self.percent(count), count))
 
         print("\n[*] Password complexity:")
         print("[+]                     digit: min(%s) max(%s)" % (self.mindigit, self.maxdigit))
@@ -226,30 +240,32 @@ class StatsGen:
         print("\n[*] Simple Masks:")
         for (simplemask, count) in sorted(iter(self.stats_simplemasks.items()), key=operator.itemgetter(1),
                                           reverse=True):
-            if self.hiderare and not count*100//self.filter_counter > 0:
+            if self.hiderare and self.israre(count):
                 continue
-            print("[+] %25s: %02d%% (%d)" % (simplemask, count*100//self.filter_counter, count))
+            print("[+] %25s: %02d%% (%d)" % (simplemask, self.percent(count), count))
 
         print("\n[*] Advanced Masks:")
         for (advancedmask, count) in sorted(iter(self.stats_advancedmasks.items()), key=operator.itemgetter(1),
                                             reverse=True):
-            if count*100//self.filter_counter > 0:
-                print("[+] %25s: %02d%% (%d)" % (advancedmask, count*100//self.filter_counter, count))
+            # Gated on --hiderare like every other section; the output file
+            # always receives the full set regardless of what is displayed.
+            if not (self.hiderare and self.israre(count)):
+                print("[+] %25s: %02d%% (%d)" % (advancedmask, self.percent(count), count))
 
             if self.output_file:
                 self.output_file.write("%s,%d\n" % (advancedmask, count))
 
 if __name__ == "__main__":
 
-    header = "                       _ \n"
-    header += "     StatsGen %s   | |\n" % VERSION
-    header += "      _ __   __ _  ___| | _\n"
-    header += "     | '_ \ / _` |/ __| |/ /\n"
-    header += "     | |_) | (_| | (__|   < \n"
-    header += "     | .__/ \__,_|\___|_|\_\\\n"
-    header += "     | |                    \n"
-    header += "     |_| iphelix@thesprawl.org\n"
-    header += "\n"
+    header =   "                       _ \n"
+    header +=  "     StatsGen %s   | |\n" % VERSION
+    header +=  "      _ __   __ _  ___| | _\n"
+    header += r"     | '_ \ / _` |/ __| |/ /" + "\n"
+    header +=  "     | |_) | (_| | (__|   < \n"
+    header += r"     | .__/ \__,_|\___|_|\_\ " + "\n"
+    header +=  "     | |                    \n"
+    header +=  "     |_| iphelix@thesprawl.org\n"
+    header +=  "\n"
 
     parser = OptionParser("%prog [options] passwords.txt\n\nType --help for more options", version="%prog "+VERSION)
 
@@ -298,5 +314,9 @@ if __name__ == "__main__":
         print("[*] Saving advanced masks and occurrences to [%s]" % options.output_file)
         statsgen.output_file = open(options.output_file, 'w')
 
-    statsgen.generate_stats(args[0])
-    statsgen.print_stats()
+    try:
+        statsgen.generate_stats(args[0])
+        statsgen.print_stats()
+    finally:
+        if statsgen.output_file:
+            statsgen.output_file.close()
