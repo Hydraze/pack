@@ -117,7 +117,7 @@ class PolicyGen:
                     sample_length_complexity += mask_complexity
 
                     if self.showmasks:
-                        mask_time = mask_complexity // self.pps
+                        mask_time = mask_complexity / self.pps
                         time_human = ">1 year" if mask_time > 60 * 60 * 24 * 365 \
                             else str(datetime.timedelta(seconds=mask_time))
                         print("[{:>2}] {:<30} [l:{:>2} u:{:>2} d:{:>2} s:{:>2}] [{:>8}]  ".format(length, mask,
@@ -136,11 +136,11 @@ class PolicyGen:
             total_complexity += total_length_complexity
             sample_complexity += sample_length_complexity
 
-        total_time = total_complexity // self.pps
+        total_time = total_complexity / self.pps
         total_time_human = ">1 year" if total_time > 60 * 60 * 24 * 365 else str(datetime.timedelta(seconds=total_time))
         print("[*] Total Masks:  %d Time: %s" % (total_count, total_time_human))
 
-        sample_time = sample_complexity // self.pps
+        sample_time = sample_complexity / self.pps
         sample_time_human = ">1 year" if sample_time > 60 * 60 * 24 * 365 else str(
             datetime.timedelta(seconds=sample_time))
         print("[*] Policy Masks: %d Time: %s" % (sample_count, sample_time_human))
@@ -148,15 +148,15 @@ class PolicyGen:
 
 if __name__ == "__main__":
 
-    header = "                       _ \n"
-    header += "     PolicyGen %s  | |\n" % VERSION
-    header += "      _ __   __ _  ___| | _\n"
-    header += "     | '_ \ / _` |/ __| |/ /\n"
-    header += "     | |_) | (_| | (__|   < \n"
-    header += "     | .__/ \__,_|\___|_|\_\\\n"
-    header += "     | |                    \n"
-    header += "     |_| iphelix@thesprawl.org\n"
-    header += "\n"
+    header =   "                       _ \n"
+    header +=  "     PolicyGen %s  | |\n" % VERSION
+    header +=  "      _ __   __ _  ___| | _\n"
+    header += r"     | '_ \ / _` |/ __| |/ /" + "\n"
+    header +=  "     | |_) | (_| | (__|   < \n"
+    header += r"     | .__/ \__,_|\___|_|\_\ " + "\n"
+    header +=  "     | |                    \n"
+    header +=  "     |_| iphelix@thesprawl.org\n"
+    header +=  "\n"
 
     # parse command line arguments
     parser = OptionParser("%prog [options]\n\nType --help for more options", version="%prog " + VERSION)
