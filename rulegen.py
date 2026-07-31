@@ -15,6 +15,9 @@
 import sys
 import re
 import time
+import queue
+import os
+import signal
 
 import multiprocessing
 import subprocess
@@ -26,6 +29,7 @@ VERSION = "0.0.4"
 
 # Testing rules with hashcat --stdout
 HASHCAT_PATH = "hashcat/"
+HASHCAT_BINARY = "hashcat"
 
 
 # Rule Generator class responsible for the complete cycle of rule generation
@@ -36,10 +40,13 @@ class RuleGen:
 
         self.threads = threads
 
-        self.enchant_broker = enchant.Broker()
-        self.enchant_broker.set_ordering("*", providers)
+        # Retained so that worker processes can rebuild the spell checker; the
+        # native Enchant handles do not survive pickling. See __getstate__.
+        self.language = language
+        self.providers = providers
+        self.custom_wordlist = None
 
-        self.enchant = enchant.Dict(language, self.enchant_broker)
+        self.init_enchant()
 
         # Output options
         self.basename = basename
@@ -62,6 +69,7 @@ class RuleGen:
         self.debug = False
         self.word = None  # Custom word to use.
         self.quiet = False
+        self.hashcat = False  # Verify each generated rule with hashcat --stdout.
 
         ########################################################################
         # Word and Rule Statistics
@@ -73,9 +81,16 @@ class RuleGen:
         # Preanalysis Password Patterns
         self.password_pattern = dict()
         self.password_pattern["insertion"] = re.compile('^[^a-z]*(?P<password>.+?)[^a-z]*$', re.IGNORECASE)
-        self.password_pattern["email"] = re.compile('^(?P<password>.+?)@[A-Z0-9.-]+\.[A-Z]{2,4}', re.IGNORECASE)
-        self.password_pattern["alldigits"] = re.compile('^(\d+)$', re.IGNORECASE)
+        self.password_pattern["email"] = re.compile(r'^(?P<password>.+?)@[A-Z0-9.-]+\.[A-Z]{2,4}', re.IGNORECASE)
+        self.password_pattern["alldigits"] = re.compile(r'^(\d+)$', re.IGNORECASE)
         self.password_pattern["allspecial"] = re.compile('^([^a-z0-9]+)$', re.IGNORECASE)
+
+        self.build_rule_engine()
+
+    def build_rule_engine(self):
+        """ Construct the hashcat rule table, the leet-speak map and the
+        preanalysis rules. Separated from __init__ so that a worker process can
+        rebuild them after unpickling; see __getstate__. """
 
         ########################################################################
         # Hashcat Rules Engine
@@ -154,7 +169,9 @@ class RuleGen:
         # Delete M characters, starting at position N
         self.hashcat_rule["O"] = lambda x, y, z: x[:y] + x[y + z:]
         # Extracts M characters, starting at position N
-        self.hashcat_rule["'"] = lambda x, y, z: x[y:y+z]
+        # NOTE: keyed "x" per hashcat's xNM; keying it "'" silently replaced
+        #       the truncate rule above and left "x" undefined.
+        self.hashcat_rule["x"] = lambda x, y, z: x[y:y+z]
         # Purge all instances of X
         self.hashcat_rule["@"] = lambda x, y: x.replace(y, '')
 
@@ -228,6 +245,37 @@ class RuleGen:
         self.preanalysis_rules.append((['r'], self.hashcat_rule['r']))  # Reverse rule
         # self.preanalysis_rules.append((['{'],self.hashcat_rule['}'])) # Rotate left
         # self.preanalysis_rules.append((['}'],self.hashcat_rule['{'])) # Rotate right
+
+    ############################################################################
+    # Process boundary support
+    #
+    # multiprocessing uses the 'spawn' start method on macOS and Windows, which
+    # pickles this object to reach the worker. The rule engine is a dict of
+    # lambdas and the spell checker is a native handle, so neither can be
+    # pickled; both are cheap to rebuild, so drop them and reconstruct in the
+    # child. Without this, rulegen cannot start a single worker on those
+    # platforms.
+    def init_enchant(self):
+        self.enchant_broker = enchant.Broker()
+        self.enchant_broker.set_ordering("*", self.providers)
+
+        if self.custom_wordlist:
+            self.enchant = enchant.request_pwl_dict(self.custom_wordlist)
+        else:
+            self.enchant = enchant.Dict(self.language, self.enchant_broker)
+
+    UNPICKLABLE = ("hashcat_rule", "preanalysis_rules", "enchant", "enchant_broker")
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        for key in self.UNPICKLABLE:
+            state.pop(key, None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.init_enchant()
+        RuleGen.build_rule_engine(self)
 
     ############################################################################
     # Calculate Levenshtein edit path matrix
@@ -354,6 +402,9 @@ class RuleGen:
             return paths
 
     def load_custom_wordlist(self, wordlist_file):
+        # Recorded so worker processes rebuild the same dictionary rather than
+        # silently falling back to the system one.
+        self.custom_wordlist = wordlist_file
         self.enchant = enchant.request_pwl_dict(wordlist_file)
 
     def generate_words(self, password):
@@ -487,9 +538,13 @@ class RuleGen:
     @staticmethod
     def int_to_hashcat(n):
         if n < 10:
-            return n
-        else:
+            return str(n)
+        elif n < 36:
             return chr(65 + n - 10)
+        else:
+            # Beyond 'Z' there is no encoding; emitting the next ASCII
+            # character would produce a rule that quietly does the wrong thing.
+            raise ValueError("hashcat position %d exceeds the 0-9A-Z range" % n)
 
     @staticmethod
     def hashcat_to_int(n):
@@ -545,6 +600,10 @@ class RuleGen:
 
             if rule_length <= self.max_rule_len:
                 hashcat_rules_collection.append(hashcat_rule)
+
+                # --maxrules caps how many rules we keep per source word.
+                if self.max_rules and len(hashcat_rules_collection) >= self.max_rules:
+                    break
 
         return hashcat_rules_collection
 
@@ -896,6 +955,11 @@ class RuleGen:
 
         best_found_rule_length = 9999
 
+        # A source word can end up with no usable rules at all (for example
+        # when every candidate exceeds --maxrulelen). Such words have nothing
+        # to contribute and must not be indexed into.
+        words = [w for w in words if w["hashcat_rules"]]
+
         # Sorted list based on rule length
         for word in sorted(words, key=lambda w: len(w["hashcat_rules"][0])):
 
@@ -916,9 +980,13 @@ class RuleGen:
                         break
 
                 if rule_length <= self.max_rule_len:
-                    hashcat_rule_str = " ".join(hashcat_rule + word["pre_rule"] or [':'])
+                    full_rule = hashcat_rule + word["pre_rule"] or [':']
+                    hashcat_rule_str = " ".join(full_rule)
                     if self.verbose:
                         print("[+] %s => %s => %s" % (word["suggestion"], hashcat_rule_str, password))
+
+                    if self.hashcat:
+                        self.verify_hashcat_rules(word["suggestion"], full_rule, password)
 
                     rules_queue.put(hashcat_rule_str)
 
@@ -993,6 +1061,54 @@ class RuleGen:
         if self.debug:
             print("[*] Word worker stopped.")
 
+    @staticmethod
+    def send_death_pills(target_queue, count, timeout=30):
+        """ Deliver `count` death pills, retrying while the queue is full.
+
+        passwords_queue is bounded, so on an early exit it is typically full.
+        Giving up on the first Full leaves workers blocked on an empty get()
+        forever and turns shutdown into a wait for the terminate fallback.
+        Consumers are still draining, so a retry succeeds shortly.
+        """
+        deadline = time.time() + timeout
+        remaining = count
+        while remaining and time.time() < deadline:
+            try:
+                target_queue.put(None, timeout=1)
+                remaining -= 1
+            except queue.Full:
+                continue
+        return count - remaining
+
+    @staticmethod
+    def stop_procs(procs, label, debug=False):
+        for proc in procs:
+            proc.join(timeout=15)
+            if proc.is_alive():
+                if debug:
+                    print("[!] %s did not stop on its own; terminating." % label)
+                proc.terminate()
+                proc.join(timeout=5)
+
+    def shutdown(self, pw_procs, writer_procs, passwords_queue, rules_queue, words_queue):
+        """ Stop the analysis workers, then the writers, in that order.
+
+        The ordering matters: a writer that stops while a worker is still
+        producing loses the tail of the analysis, so each stage is only given
+        its death pill once the stage feeding it has fully exited.
+        """
+        self.send_death_pills(passwords_queue, len(pw_procs))
+        self.stop_procs(pw_procs, "Password analysis worker", self.debug)
+
+        # Writers only once every producer is gone, so nothing is still being
+        # queued behind the pill.
+        self.send_death_pills(rules_queue, 1)
+        self.send_death_pills(words_queue, 1)
+
+        # Wait for the writers so the output files are flushed and closed
+        # before anything reads them back.
+        self.stop_procs(writer_procs, "Output writer", self.debug)
+
     # Analyze passwords file
     def analyze_passwords_file(self, passwords_file):
         """ Analyze provided passwords file. """
@@ -1006,11 +1122,17 @@ class RuleGen:
         words_queue = multiprocessing.Queue()
 
         # Start workers
+        pw_procs = []
         for i in range(self.threads):
-            multiprocessing.Process(target=self.password_worker,
-                                    args=(i, passwords_queue, rules_queue, words_queue)).start()
-        multiprocessing.Process(target=self.rule_worker, args=(rules_queue, "%s.rule" % self.basename)).start()
-        multiprocessing.Process(target=self.word_worker, args=(words_queue, "%s.word" % self.basename)).start()
+            pw_procs.append(multiprocessing.Process(target=self.password_worker,
+                                    args=(i, passwords_queue, rules_queue, words_queue)))
+            pw_procs[i].start()
+        writer_procs = [
+            multiprocessing.Process(target=self.rule_worker, args=(rules_queue, "%s.rule" % self.basename)),
+            multiprocessing.Process(target=self.word_worker, args=(words_queue, "%s.word" % self.basename)),
+        ]
+        for proc in writer_procs:
+            proc.start()
 
         # Continue with the main thread
 
@@ -1019,17 +1141,37 @@ class RuleGen:
         password_count = 0
         analysis_start = time.time()
         segment_start = analysis_start
+
+        # Ctrl-C is a documented way to end a run early, so treat it as a
+        # request to stop reading rather than an exception. Letting
+        # KeyboardInterrupt fire inside a blocking Queue.put leaves the queue
+        # in a state where no further item can be delivered, which used to
+        # hang the shutdown instead of writing out the partial analysis.
+        stop_reading = False
+
+        def request_stop(signum, frame):
+            nonlocal stop_reading
+            if not stop_reading:
+                stop_reading = True
+                print("\n[!] Rulegen was interrupted; finishing queued work.")
+
+        previous_handler = signal.signal(signal.SIGINT, request_stop)
+
         try:
             for password in f:
+                if stop_reading:
+                    break
+
                 password = password.rstrip('\r\n')
                 if len(password) > 0:
 
                     # Provide analysis time feedback to the user
                     if not self.quiet and password_count != 0 and password_count % 5000 == 0:
-                        segment_time = time.time() - segment_start
+                        now = time.time()
+                        segment_time = now - segment_start
                         print("[*] Processed %d passwords in %.2f seconds at the rate of %.2f p/sec" %
-                              (password_count, segment_start - analysis_start, 5000 / segment_time))
-                        segment_start = time.time()
+                              (password_count, now - analysis_start, 5000 / segment_time))
+                        segment_start = now
 
                     password_count += 1
 
@@ -1037,85 +1179,84 @@ class RuleGen:
                     if self.check_reversible_password(password):
                         passwords_queue.put(password)
 
-        except (KeyboardInterrupt, SystemExit):
+        except SystemExit:
             print("\n[!] Rulegen was interrupted.")
 
-        else:
-            # Signal workers to stop.
-            for i in range(self.threads):
-                passwords_queue.put(None)
-
-                # Wait for all of the queued passwords to finish.
-            while not passwords_queue.empty():
-                time.sleep(1)
-
-            # Signal writers to stop.
-            rules_queue.put(None)
-            words_queue.put(None)
-
-        f.close()
+        finally:
+            signal.signal(signal.SIGINT, previous_handler)
+            f.close()
+            # Shut down on every path, so an early exit still closes the output
+            # files rather than leaking children and reading a partial file.
+            self.shutdown(pw_procs, writer_procs, passwords_queue, rules_queue, words_queue)
 
         analysis_time = time.time() - analysis_start
+        rate = password_count / analysis_time if analysis_time else 0.0
         print("[*] Finished processing %d passwords in %.2f seconds at the rate of %.2f p/sec" %
-              (password_count, analysis_time, float(password_count) / analysis_time))
+              (password_count, analysis_time, rate))
+
+        if not password_count:
+            print("[!] No passwords were processed; nothing to report.")
+            return
+
+        def share(n):
+            return n * 100.0 / password_count
 
         print("[*] Generating statistics for [%s] rules and words." % self.basename)
         print("[-] Skipped %d all numeric passwords (%0.2f%%)" %
-              (self.numeric_stats_total, float(self.numeric_stats_total) * 100.0 / float(password_count)))
+              (self.numeric_stats_total, share(self.numeric_stats_total)))
         print("[-] Skipped %d passwords with less than 25%% alpha characters (%0.2f%%)" %
-              (self.special_stats_total, float(self.special_stats_total) * 100.0 / float(password_count)))
+              (self.special_stats_total, share(self.special_stats_total)))
         print("[-] Skipped %d passwords with non ascii characters (%0.2f%%)" %
-              (self.foreign_stats_total, float(self.foreign_stats_total) * 100.0 / float(password_count)))
+              (self.foreign_stats_total, share(self.foreign_stats_total)))
 
-        # TODO: Counter breaks on large files. uniq -c | sort -rn is still the most 
+        # TODO: Counter breaks on large files. uniq -c | sort -rn is still the most
         #       optimal way.
-        rules_file = open("%s.rule" % self.basename, 'r')
-        rules_sorted_file = open("%s-sorted.rule" % self.basename, 'w')
-        rules_counter = Counter(rules_file)
-        rule_counter_total = sum(rules_counter.values())
+        with open("%s.rule" % self.basename, 'r') as rules_file, \
+                open("%s-sorted.rule" % self.basename, 'w') as rules_sorted_file:
+            print("\n[*] Top 10 rules")
+            for (rule, count, share) in self.print_top10(Counter(rules_file), rules_sorted_file):
+                print("[+] %s - %d (%0.2f%%)" % (rule, count, share))
 
-        print("\n[*] Top 10 rules")
-        rules_i = 0
-        for (rule, count) in rules_counter.most_common():
-            rules_sorted_file.write(rule)
-            if rules_i < 10:
-                print("[+] %s - %d (%0.2f%%)" % (rule.rstrip('\r\n'), count, count * 100 / rule_counter_total))
-            rules_i += 1
+        with open("%s.word" % self.basename, 'r') as words_file, \
+                open("%s-sorted.word" % self.basename, 'w') as words_sorted_file:
+            print("\n[*] Top 10 words")
+            for (word, count, share) in self.print_top10(Counter(words_file), words_sorted_file):
+                print("[+] %s - %d (%0.2f%%)" % (word, count, share))
 
-        rules_file.close()
-        rules_sorted_file.close()
-
-        words_file = open("%s.word" % self.basename, 'r')
-        words_sorted_file = open("%s-sorted.word" % self.basename, 'w')
-        words_counter = Counter(words_file)
-        word_counter_total = sum(rules_counter.values())
-
-        print("\n[*] Top 10 words")
-        words_i = 0
-        for (word, count) in words_counter.most_common():
-            words_sorted_file.write(word)
-            if words_i < 10:
-                print("[+] %s - %d (%0.2f%%)" % (word.rstrip('\r\n'), count, count * 100 / word_counter_total))
-            words_i += 1
-
-        words_file.close()
-        words_sorted_file.close()
+    @staticmethod
+    def print_top10(counter, sorted_file):
+        """ Write every entry to sorted_file in frequency order and return the
+        top ten as (value, count, percent). The percentage is relative to this
+        counter's own total: rules and words are separate populations. """
+        total = sum(counter.values())
+        top = []
+        for i, (value, count) in enumerate(counter.most_common()):
+            sorted_file.write(value)
+            if i < 10:
+                top.append((value.rstrip('\r\n'), count, count * 100 / total if total else 0.0))
+        return top
 
     ############################################################################
     def verify_hashcat_rules(self, word, rules, password):
 
-        f = open("%s/test.rule" % HASHCAT_PATH, 'w')
-        f.write(" ".join(rules))
-        f.close()
+        binary = os.path.join(HASHCAT_PATH, HASHCAT_BINARY)
+        if not os.path.isfile(binary):
+            raise RuntimeError(
+                "--hashcat needs the hashcat binary at %s. Set HASHCAT_PATH / "
+                "HASHCAT_BINARY in rulegen.py to match your install." % binary)
 
-        f = open("%s/test.word" % HASHCAT_PATH, 'w')
-        f.write(word)
-        f.close()
+        rule_path = os.path.join(HASHCAT_PATH, "test.rule")
+        word_path = os.path.join(HASHCAT_PATH, "test.word")
 
-        p = subprocess.Popen(["%s/hashcat-cli64.bin" % HASHCAT_PATH, "-r", "%s/test.rule" % HASHCAT_PATH, "--stdout",
-                              "%s/test.word" % HASHCAT_PATH], stdout=subprocess.PIPE)
+        with open(rule_path, 'w') as f:
+            f.write(" ".join(rules))
+
+        with open(word_path, 'w') as f:
+            f.write(word)
+
+        p = subprocess.Popen([binary, "-r", rule_path, "--stdout", word_path], stdout=subprocess.PIPE)
         out, err = p.communicate()
-        out = out.strip()
+        out = out.decode('latin-1').strip()
 
         if out == password:
             hashcat_rules_str = " ".join(rules or [':'])
@@ -1129,15 +1270,15 @@ class RuleGen:
 
 if __name__ == "__main__":
 
-    header = "                       _ \n"
-    header += "     RuleGen %s    | |\n" % VERSION
-    header += "      _ __   __ _  ___| | _\n"
-    header += "     | '_ \ / _` |/ __| |/ /\n"
-    header += "     | |_) | (_| | (__|   < \n"
-    header += "     | .__/ \__,_|\___|_|\_\\\n"
-    header += "     | |                    \n"
-    header += "     |_| iphelix@thesprawl.org\n"
-    header += "\n"
+    header =   "                       _ \n"
+    header +=  "     RuleGen %s    | |\n" % VERSION
+    header +=  "      _ __   __ _  ___| | _\n"
+    header += r"     | '_ \ / _` |/ __| |/ /" + "\n"
+    header +=  "     | |_) | (_| | (__|   < \n"
+    header += r"     | .__/ \__,_|\___|_|\_\ " + "\n"
+    header +=  "     | |                    \n"
+    header +=  "     |_| iphelix@thesprawl.org\n"
+    header +=  "\n"
 
     parser = OptionParser("%prog [options] passwords.txt", version="%prog " + VERSION)
 
